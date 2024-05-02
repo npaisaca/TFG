@@ -1,0 +1,363 @@
+---
+title: "RNA-seq Analysis"
+author: "Núria Paisano Cabrera"
+date: "January-February 2024"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = FALSE)
+```
+
+### Software used
+
+- FastQC v0.11.9
+- MultiQC v1.12
+- BBMap v39.06
+- HISAT2  v2.2.1
+- Samtools v1.16.1
+- featureCounts v2.0.3
+- R v4.3.3
+
+
+## FILE PREPARATION
+
+The files have been sent via email. To download them, we need a username and password given by the CRG. The link leads us to a repository with every file. Check that there are two files per sample number (forward and reverse read). Check that all files are in fastq or fastq.gz format.
+
+**The files will be downloaded first into the team hard-drive. Then, once all the files are stored, the whole folder will be copied into the computer's own storage.**
+
+In the disk drive, create a new directory to store the files:
+```
+  cd /media/sbeato/Seagate Basic/
+  mkdir TNA2_RNAseq_NPC
+
+```
+
+Start downloading the files:
+```
+  cd ~/TNA2_RNAseq_NPC
+  wget <URL_of_every_file>
+
+```
+
+_NOTE: If the wget command doesn't work, download the files "normally" (first in the downloads folder and then copy them manually into the new directory)._
+
+### Concatenating files
+
+Sometimes, due to problems during the reads, multiple files might be sent for the same sample. However, the input of the programs downstream expects one single file per sample and direction of read.
+
+To concatenate files:
+```
+  cat file1.fastq file2.fastq > mergedfile.fastq
+  
+```
+
+_NOTE: if the files are compressed (fastq.gz), they may need to be uncompressed before the concatenation._
+
+### Checking the md5sum
+
+The md5sum of a file checks that the digital footprint of the file as found in the repository coincides with that of the file downloaded on the computer. Makes sure there was no error with the download itself and that what was downloaded is the desired file and not something else. In this case, the CRG also returned a txt file with a compilation of the md5sums of the read files; we can use it to compare directly our local files without further terminal commands.
+
+The command to check the md5sum of a local file is:
+```
+  md5sum <file name with extension> <path of the file>
+
+```
+
+The output number should coincide with the one provided by the original source of the data. If all md5sums coincide, we can proceed.
+
+_NOTE: If the current directory is already set to where the file is, there is no need to specify the path of the file._
+
+_NOTE: The command to check the md5sum of a file online is:_
+```
+  wget -O- <URL> | md5sum
+
+```
+
+
+## QUALITY CONTROL ANALYSIS (FastQC)
+
+The quality control (QC) analysis is done via:
+```
+  cd ~/TNA2_RNAseq_NPC
+  fastqc *fastq.gz
+
+```
+  
+With this command the program will analyze all fastq files at the same time (sequentially). The results will be saved in the same directory as the fastq files. To visualize the report for each sample click on the corresponding html file (will open a browser tab with the results). A description of each item of the report can be found at the [FastQC webpage](https://www.bioinformatics.babraham.ac.uk/projects/fastqc/).
+
+Take into account that each item gives a pass/fail score that may not apply to a specific kind of library- for example, the "per base seq content", "per seq G/C content", "seq dup levels" and "overrepresented sequences" modules will almost always return a warning or even a failed status for a RNAseq library, mainly due to the presence of adapters or a library bias.
+
+The **number of reads per sample** is found in the "basic statistics" module. Take into account that, in this stage of the pipeline, there are two files per sample analyzed (since the analysis was done via paired-end reading); the number of reads per sample should coincide in both files of the same sample. The _total_ number of reads is, therefore, twice the amount described in the module per sample.
+
+Concentrate the QCs into one report:
+```
+  multiqc . -i PreAlignment-QC
+
+```
+
+Move all the QCs to a new folder:
+```
+  mkdir Pre-QC
+  mv *qc* Pre-QC/
+
+```
+
+
+## TRIMMING (BBMap)
+
+Create a new directory for reads 2 (R2) and move them there:
+```
+  cd ~/TNA2_RNAseq_NPC
+  mkdir R2
+  mv *R2* ~/TNA2_RNAseq_NPC/R2
+
+```
+
+Make directory for trimming output:
+```
+  mkdir trimming
+
+```
+  
+Create a txt file (bash program) with the following code and save as RNAseq-trimming.sh **in the same folder where the .fastq.gz files are**:
+
+```bash
+    #!/bin/bash
+    set -e
+    set -u
+    set -o pipefail
+
+   sample_name=$(basename -s ".fastq.gz" "$1")
+      bash /home/sbeato/SOFTWARE/bbmap/bbduk.sh -Xmx1g  in1="/home/sbeato/TNA2_RNAseq_NPC/${sample_name}.fastq.gz" in2="/home/sbeato/TNA2_RNAseq_NPC/R2/${sample_name}.fastq.gz"  out1="/home/sbeato/TNA2_RNAseq_NPC/trimming/${sample_name}-trim.fastq.gz" out2="/home/sbeato/TNA2_RNAseq_NPC/trimming/${sample_name}-2-trim.fastq.gz" ref=/home/sbeato/SOFTWARE/bbmap/resources/adapters.fa ktrim=r k=23 mink=11 hdist=1 tpe tbo qtrim=r trimq=30 minlen=23 stats="/home/sbeato/TNA2_RNAseq_NPC/trimming/${sample_name}-stats.txt"
+
+ ```
+
+Parts of this bash code include:
+
+- **#!/bin/bash**: indicates that what follows is a bash code.
+- **set -e**: stops the execution of the bash script if the last command in the pipeline where it will be used has an error (returns a non-zero status).
+- **set -u**: treats unset variables (other than special parameters) as an error.
+- **set -o pipefail**: if any of the commands in a pipeline returns an error (non-zero status), propagates this error so that the overall return of the command is an error (and the bash is interrupted via set -e).
+- **sample_name=**: replace every instance of "sample_name" that appears in the bash code by the name of one file that ends in .fastq.gz (and is in the same folder).
+- **Flag -Xmx1g**: determines the amount of virtual memory (1G of RAM) that we will force the program to use. This program is based on Java, which needs to have the amount of memory it is allowed to use specified upfront, or will use all memory available.
+- **in1/in2**: path of the input files. Should coincide with the two reads of one sample.
+- **out1/out2**: path of the trimmed output files, one for each read.
+- **ref**: reference sequence for the adapters that will be trimmed (included in bbmap package).
+- **ktrim=r**: when there is a match with an adapter read, that read and everything to the right of it will be trimmed (default mode).
+- **k=23**: kmer length; must be at most the length of adapters. The longer the kmer indicated, the higher the specificity.
+- **mink=11**: allows to use shorter kmers (in this case of 11 bases) at the ends of reads.
+- **hdist=1**: hamming distance, which is the number of mismatches allowed per pairing (in this case only 1 mismatch is allowed).
+- **tpe**: specifies to trim both reads to the same length if an adapter was detected in only 1 read.
+- **tbo**: specifies to also trim adapters based on overlap detection using BBMerge (no known sequences are required).
+- **qtrim=r**: only the right side will be trimmed (like ktrim, but forcing quality trim using the Phred algorithm, which is more accurate).
+- **trimq=30**: indicates the degree of quality trim according to the Phred algorithm (in this case Q30).
+- **minlen=23**: discards reads shorter than 23bp after trimming to Q30 (using the trimq command above).
+
+
+Invoke RNAseq-trimming.sh and perform the trimming:
+```
+  find . -name "*.fastq.gz" | xargs -n 1 -P 1 bash RNAseq-trimming.sh 2>RNA-trimming.log
+
+```
+
+This pipeline command finds in the current directory all files that end in .fastq.gz and then, for all them, one file and one process at a time, uses the bash code RNAseq-trimming.sh and redirects any standard errors to the RNA-trimming.log file.
+
+_NOTE: If the pipeline command returns an error file, it may be due to the names of the .fastq.gz files (for example, if they include indicators -1 and -2 for each read). ONCE THEY ARE IN DIFFERENT FOLDERS, change the file names so it's the same for both reads, and try running the code again (change the bash program accordingly if necessary)._
+
+A stats file will be generated for each sample processed by the program.
+
+To analyze the trimming quality we can use FastQC again:
+```
+  cd trimming
+  fastqc *fastq.gz
+  multiqc . -i Trimming-QC
+  mkdir Trimming-QC
+  mv *qc* Trimming-QC/
+
+```
+
+In this new report there is now a "BBTools" category with a filtering statistics summary table that shows the **percentage of trimming** of each sample. An excellent trimming should not go lower than 99% (100% minus the number shown in the multiqc report), and a good trimming should not go lower than 90%. If the trimming was correct, we should also observe no primer presence anymore in the section "Adapter Content" of the FastQC analysis (if there was any to begin with).
+
+_NOTE: The "Sequence length distribution" module now issues a warning. That's due to the trimming process, which made some reads shorter._
+
+
+## ALIGNMENTS AND SORTING (hisat2, samtools, featureCounts)
+
+### Creation of the reference genome index
+
+Copy the genome and the annotations (used downstream) to the new directory. Make sure the genome file is in fasta/fa format and the annotation is in gtf format.
+```
+  cd ~/genomes/
+  mkdir dlabrax
+  cd /media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/dicLab1
+  cp -v dicLab1_scaffold.fasta NEW_COMBINED_ANNOTATION_FUNCTION.gtf NEW_COMBINED_ANNOTATION_ID_ONLY.gtf ~/genomes/dlabrax
+  cd ~/genomes/dlabrax
+  mv dicLab1_scaffold.fasta genome.fasta
+  mv NEW_COMBINED_ANNOTATION_FUNCTION.gtf annot_function.gtf
+  mv NEW_COMBINED_ANNOTATION_ID_ONLY.gtf annot_id_only.gtf
+
+```
+
+
+_NOTE: Take note of the version of the genome used (for example on an easily accessible text file)._
+```
+  echo "Genome assembly: dicLab v1.0c (Kuhl and Reinhardts). Information available in: http://seabass.mpipz.de/. June 2012"  > genome_version.txt
+
+```
+
+Build the genome index:
+```
+  hisat2-build -p 16 genome.fasta genome
+
+```
+
+_NOTE: the -p option indicates the program to use 16 parallel search threads using different computer cores, speeding up the process._
+  
+### Alignment
+
+_NOTE: If the files are in a .gz format, uncompress them before proceeding:_
+```
+  cd ~/TNA2_RNAseq_NPC/trimming
+  gzip -d *.fastq.gz
+
+```
+_Otherwise skip this step._
+
+Perform the alignment:
+```
+  cd ~/TNA2_RNAseq_NPC/trimming
+  mkdir -p Hisat2-Alignments Hisat2-Summaries
+  hisat2 -p 8 --dta --rna-strandness FR --phred33 -x /home/sbeato/genomes/dlabrax/genome -1 "sample_name-trim.fastq" -2 "sample_name-2-trim.fastq" -t -S "Hisat2-Alignments/sample_name.sam" --summary-file "Hisat2-Summaries/sample_name-summary.txt"
+
+```
+
+Parts of this instruction include:
+
+- **-p 8**: use 8 parallel threads (see above).
+- **--dta**: downstream transcriptome assembly; indicates the program to use longer anchor lengths, improving computation and memory usage.
+- **--rna-strandness FR**: strand-specific information; for paired ends, using FR indicates that we have both strands present.
+- **-phred 33**: Phred quality used by the Illumina pipeline (in this case 33).
+- **-x**: path of the reference genome used.
+- **-1**: first read of the sample.
+- **-2**: second read of the sample.
+- **-t**: print on the terminal the time spent loading the index and aligning the reads.
+- **-S**: path of the SAM file output.
+- **--summary-file**: path of the output file with the alignment summary for this sample.
+
+As stated above, a stats file will be generated for each sample processed by the program in the folder Hisat2-Summaries. At the bottom of the file is the **percentage of alignment**. Over 70% is considered acceptable, although normally the percentage is between 80-90%. The percentage of alignment will also be displayed in the terminal.
+
+Now that there is only one file per sample, file names may be changed in order to make the read counts file downstream more compact.
+```
+  cd Hisat2-Alignments
+  mv sample_name_ATCG-ATCG_001.sam sample_name.sam
+
+```
+
+_NOTE: sometimes the SAM files are too heavy and the computer's storage might fill up quickly. If this happens, free space by re-zipping the original and trimmed fastq files (back to fastq.gz) using the pigz zipper (compresses faster than gzip):_
+```
+  pigz *.fastq
+
+```
+
+### Sorting
+
+SAM to BAM conversion:
+```
+  cd Hisat2-Alignments
+  samtools view -S -b sample_name.sam > sample_name.bam
+  samtools view sample_name.bam | head
+
+```
+
+Parts of this instruction include:
+
+- **view**: samtools subcommand for SAM/BAM conversion.
+- **-S**: the input is a SAM file.
+- **-b**: the output is a BAM file.
+
+Sorting:
+```
+  samtools sort sample_name.bam -o sample_name.sorted.bam
+  samtools view sample_name.sorted.bam | head
+  mkdir Sorted-bams
+  mv *.sorted.bam Sorted-bams
+
+```
+
+_NOTE: If the reads are not sorted by read name using samtools before using featureCounts, the latter may assume the reads are not properly paired and give an error._
+
+
+Generation of the Counts file:
+```
+  cd Sorted-bams
+  featureCounts -p -t exon -g gene_id --primary -s 2 --ignoreDup -a /home/sbeato/genomes/dlabrax/annot_id.gtf -o /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/dicLab_featureCounts.txt /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/0616.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/0629.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/0634.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/0636.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/0643.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/0653.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/0661.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/0681.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/0683.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/0720.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/0734.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/0735.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/0749.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/0750.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/0764.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/0776.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/0779.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/0789.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/0791.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/1122.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/1154.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/1161.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/1184.sorted.bam /home/sbeato/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/1190.sorted.bam
+
+```
+
+Parts of this instruction include:
+
+- **-p**: fragments are counted instead of reads (only paired-end reads).
+- **-t**: feature types in the GTF annotation (in this case and by default, exon).
+- **-g**: attribute type in the GTF annotation (in this case and by default, gene_id).
+- **--primary**: only count primary alignments.
+- **-s**: strand-specific read counting. 2 means "reversely stranded".
+- **--ignoreDup**: ignore duplicate reads when counting.
+- **-a**: path to the annotation file (GTF).
+- **-o**: path of the output file (.txt).
+- **After the output file, the paths of all the input files are indicated sequentially.**
+
+Move the files to a new folder:
+```
+  cd ~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams
+  mkdir csv
+  mv *.txt csv
+
+```
+
+Perform a last quality control:
+```
+  multiqc . -i AlignSorted-QC
+
+```
+
+
+## FILE PREPARATION (R)
+
+Create a copy of the Counts file and clean it leaving only the GeneID and the counts:
+```
+  cd csv
+  cp dicLab_featureCounts.txt dicLab_featureCounts_metadata.txt
+  cut -f1,7-30 dicLab_featureCounts.txt > dicLab_featureCounts_cut.txt
+
+```
+
+_NOTE: In the featureCounts output file, the counts are always the n last columns starting from number 7._
+
+_NOTE: If the .txt file with the counts is opened with csv prior to file preparation steps below, set the column separator only to Tab for the results to be visualized correctly. If the file being opened is the cut.txt file instead, column separators should be set to both Tab and Comma._
+
+
+Preparation of the RNAcounts files:
+```{r}
+RNAcounts <- read.csv2("~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/dicLab_featureCounts_cut.txt", sep = "\t", row.names = 1, header = FALSE)
+RNAcounts <- RNAcounts[-c(1,2),]
+colnames(RNAcounts) <- c("0616", "0629", "0634", "0636", "0643", "0653", "0661", "0681", "0683", "0720", "0734", "0735", "0749", "0750", "0764", "0776", "0779", "0789", "0791", "1122", "1154", "1161", "1184", "1190")
+write.csv(as.data.frame(RNAcounts), "~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/RNAcounts_def.csv")
+
+RNAcounts_metadata <- read.csv2("~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/dicLab_featureCounts_metadata.txt", sep = "\t", row.names = 1, header = FALSE)
+RNAcounts_metadata <- RNAcounts_metadata[-c(1,2),]
+colnames(RNAcounts_metadata) <- c("Chr", "Start", "End", "Strand", "Length", "0616", "0629", "0634", "0636", "0643", "0653", "0661", "0681", "0683", "0720", "0734", "0735", "0749", "0750", "0764", "0776", "0779", "0789", "0791", "1122", "1154", "1161", "1184", "1190") 
+write.csv(as.data.frame(RNAcounts_metadata), "~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/RNAcounts_metadata_def.csv")
+
+```
+
+Preparation of the experimental design file:
+```{r}
+exp_des <- read.csv2("/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/results/stats_def.csv", sep = ";", row.names = 1, header = TRUE)
+exp_des <- exp_des[c(1)]
+write.csv(as.data.frame(exp_des), "~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/exp_des.csv")
+
+```
