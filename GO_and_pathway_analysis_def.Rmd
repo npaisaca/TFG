@@ -1,0 +1,427 @@
+---
+title: "GO and Pathway Analysis"
+author: "Núria Paisano Cabrera"
+date: "March-April 2024"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = FALSE)
+```
+
+### Software used
+
+- R v4.3.3
+
+Packages:
+
+- gprofiler2 0.2.3
+- ggplot2 3.5.0
+- dplyr 1.1.4
+
+Based on: <http://127.0.0.1:18001/library/gprofiler2/doc/gprofiler2.html>
+
+
+## LOAD PACKAGES
+
+If we are installing packages for the first time:
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install("packagename")
+```
+
+Loading packages:
+```{r}
+lapply(c("gprofiler2", "dplyr"), library, character.only=TRUE)
+  #gprofiler2: GO terms enrichment analysis
+  #dplyr: allows data manipulation
+```
+
+
+## FILE PREPARATION
+
+Creation of an overall id file filtered by genes that have at least 1 count:
+```{r}
+ids <- read.csv2("/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/hg_CombinedAnnotation_seabassV1.0_ids.csv", sep = ",")
+ids_all <- subset(ids, X.1 != "-")   #we eliminate the NA values for clearer input
+
+RNAcounts_ids <- RNAcounts[which(rowSums(RNAcounts)>=1), ]
+RNAcounts_idsnames <- rownames(RNAcounts_ids)
+ids_all <- subset(ids_all, X %in% RNAcounts_idsnames)
+ids_all <- ids_all$X.1
+```
+
+
+After DEA we need to separate the over-expressed and under-expressed genes of each comparison and save them in two separate files:
+```{r}
+#MvF:
+MvF_over <- subset(MvF_res, MvF_res$log2FoldChange > 0)
+MvFover <- rownames(MvF_over)
+ids_MvF_over <- subset(ids, X %in% MvFover)
+write.csv(as.data.frame(ids_MvF_over),file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/ids_MvF_over.csv")
+ids_MvF_over_cut <- subset(ids_MvF_over, X.1 != "-")
+ids_MvF_over_cut <- ids_MvF_over_cut$X.1
+cat(ids_MvF_over_cut,file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/MvF_ids_over.txt",sep="\n")
+
+MvF_under <- subset(MvF_res, MvF_res$log2FoldChange < 0)
+MvFunder <- rownames(MvF_under)
+ids_MvF_under <- subset(ids, X %in% MvFunder)
+write.csv(as.data.frame(ids_MvF_under),file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/ids_MvF_under.csv")
+ids_MvF_under_cut <- subset(ids_MvF_under, X.1 != "-")
+ids_MvF_under_cut <- ids_MvF_under_cut$X.1
+cat(ids_MvF_under_cut,file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/MvF_ids_under.txt",sep="\n")
+
+
+#NMvF:
+NMvF_over <- subset(NMvF_res, NMvF_res$log2FoldChange > 0)
+NMvFover <- rownames(NMvF_over)
+ids_NMvF_over <- subset(ids, X %in% NMvFover)
+write.csv(as.data.frame(ids_NMvF_over),file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/ids_NMvF_over.csv")
+ids_NMvF_over_cut <- subset(ids_NMvF_over, X.1 != "-")
+ids_NMvF_over_cut <- ids_NMvF_over_cut$X.1
+cat(ids_NMvF_over_cut,file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/NMvF_ids_over.txt",sep="\n")
+
+NMvF_under <- subset(NMvF_res, NMvF_res$log2FoldChange < 0)
+NMvFunder <- rownames(NMvF_under)
+ids_NMvF_under <- subset(ids, X %in% NMvFunder)
+write.csv(as.data.frame(ids_NMvF_under),file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/ids_NMvF_under.csv")
+ids_NMvF_under_cut <- subset(ids_NMvF_under, X.1 != "-")
+ids_NMvF_under_cut <- ids_NMvF_under_cut$X.1
+cat(ids_NMvF_under_cut,file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/NMvF_ids_under.txt",sep="\n")
+
+```
+
+There is no transformation needed for the NMvM comparison since there are only 3 DEGs, and thus a GO analysis will be impossible.
+
+
+## GO ANALYSIS - GENE LIST FUNCTIONAL ENRICHMENT
+
+### CONSIDERATIONS
+
+Regarding the R instructions:
+- The query input is a vector type `c()` containing the GO IDs, or directly the name of an already saved vector. Set `multi_query = TRUE` to input multiple vectors.
+- Only set `ordered_query = TRUE` if we know of an already existing hierarchical relation between genes, otherwise set it to `FALSE`.
+- If `significant = FALSE`, we must also set `highlight = FALSE`.
+- By default, the overrepresented genes are measured. To visualize the underrepresented genes, set `measure_underrepresentation = TRUE`.
+- The parameter `user_threshold` corresponds to the p-value used. In this case it is set to 0.01.
+- The developers of the package recommend using `correction_method = "g_SCS"`, but given that the rest of our analysis has used FDR, we will use that as well for this part (`correction_method = "fdr"`).
+- By default, the `domain_scope` is set to show all annotated genes of the specified organism. To input a custom list, we must set `domain_scope = "custom_annotated"` and add in `custom_bg` the name of a vector with the gene list we want to use as background (in our case, background corresponds to the GO terms of all genes that got at least 1 read in the RNAseq).
+
+In this analysis, we will use as reference organisms _Homo sapiens_ (hsapiens) and _Danio rerio_ (drerio) first since they are model organisms which are better annotated.
+
+Due to the very few DEGs obtained in the NMvM comparison, we can only do a GO terms analysis on the MvF and NMvF comparisons.
+
+Results should also be converted into dataframes and saved for future reference.
+
+
+### HOMO SAPIENS
+
+```{r}
+#MvF overexpressed:
+gostres_MvF_up_hs <- gost(query = ids_MvF_over_cut, 
+                            organism = "hsapiens", ordered_query = FALSE, 
+                            multi_query = FALSE, significant = TRUE, exclude_iea = FALSE, 
+                            measure_underrepresentation = FALSE, evcodes = FALSE,
+                            user_threshold = 0.01, correction_method = "fdr", 
+                            domain_scope = "custom_annotated", custom_bg = ids_all, 
+                            numeric_ns = "", sources = NULL, as_short_link = FALSE, highlight = TRUE)
+
+gostres_dataframe <- gostres_MvF_up_hs$result %>%
+  as.data.frame
+gostres_dataframe$parents <- as.character(gostres_dataframe$parents)
+  #the column "parents" needs to be set to character (instead of list) in order to write the dataframe
+gostres_dataframe <- gostres_dataframe[order(gostres_dataframe$p_value),]
+write.csv(as.data.frame(gostres_dataframe), file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_dataframes/MvF_hsapiens_up.csv")
+
+gostplot(gostres_MvF_up_hs, capped = TRUE, interactive = TRUE)
+  #NOTE: if saved as png, the graph is no longer interactive
+
+p <- gostplot(gostres_MvF_up_hs, capped = TRUE, interactive = FALSE)
+publish_gostplot(p, highlight_terms = c("GO:0016020", "GO:0032502", "GO:0048856", "GO:0110165", "GO:0005488"), 
+                       width = NA, height = NA, filename = "/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_graphs/MvF_hsapiens_up.png")
+  #Add only the GO term numbers we wish to check
+  #To check the GO term number, use the dataframe result of the gostres object and search for name of term in question
+```
+
+```{r}
+#MvF underexpressed:
+gostres_MvF_down_hs <- gost(query = ids_MvF_under_cut, 
+                             organism = "hsapiens", ordered_query = FALSE, 
+                             multi_query = FALSE, significant = TRUE, exclude_iea = FALSE, 
+                             measure_underrepresentation = FALSE, evcodes = FALSE,
+                             user_threshold = 0.01, correction_method = "fdr", 
+                             domain_scope = "custom_annotated", custom_bg = ids_all, 
+                             numeric_ns = "", sources = NULL, as_short_link = FALSE, highlight = TRUE)
+
+gostres_dataframe <- gostres_MVF_down_hs$result %>%
+  as.data.frame
+gostres_dataframe$parents <- as.character(gostres_dataframe$parents)
+gostres_dataframe <- gostres_dataframe[order(gostres_dataframe$p_value),]
+write.csv(as.data.frame(gostres_dataframe), file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_dataframes/MvF_hsapiens_down.csv")
+
+gostplot(gostres_MVF_down_hs, capped = TRUE, interactive = TRUE)
+
+p <- gostplot(gostres_MVF_under_hs, capped = TRUE, interactive = FALSE)
+publish_gostplot(p, highlight_terms = c("GO:0045291", "GO:0000353", "GO:0000365"), 
+                       width = NA, height = NA, filename = "/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_graphs/MvF_hsapiens_down.png")
+```
+
+```{r}
+#NMvF overexpressed:
+gostres_NMvF_up_hs <- gost(query = ids_NMvF_over_cut, 
+                            organism = "hsapiens", ordered_query = FALSE, 
+                            multi_query = FALSE, significant = TRUE, exclude_iea = FALSE, 
+                            measure_underrepresentation = FALSE, evcodes = FALSE,
+                            user_threshold = 0.01, correction_method = "fdr", 
+                            domain_scope = "custom_annotated", custom_bg = ids_all, 
+                            numeric_ns = "", sources = NULL, as_short_link = FALSE, highlight = TRUE)
+
+gostres_dataframe <- gostres_NMvF_up_hs$result %>%
+  as.data.frame
+gostres_dataframe$parents <- as.character(gostres_dataframe$parents)
+gostres_dataframe <- gostres_dataframe[order(gostres_dataframe$p_value),]
+write.csv(as.data.frame(gostres_dataframe), file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_dataframes/NMvF_hsapiens_up.csv")
+
+gostplot(gostres_NMvF_up_hs, capped = TRUE, interactive = TRUE)
+
+p <- gostplot(gostres_NMvF_up_hs, capped = TRUE, interactive = FALSE)
+publish_gostplot(p, highlight_terms = c("GO:0016020", "GO:0032502", "GO:0048856", "GO:0110165", "GO:0005488"), 
+                       width = NA, height = NA, filename = "/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_graphs/NMvF_hsapiens_up.png")
+```
+
+```{r}
+#NMvF underexpressed:
+gostres_NMvF_down_hs <- gost(query = ids_NMvF_under_cut, 
+                             organism = "hsapiens", ordered_query = FALSE, 
+                             multi_query = FALSE, significant = TRUE, exclude_iea = FALSE, 
+                             measure_underrepresentation = FALSE, evcodes = FALSE,
+                             user_threshold = 0.01, correction_method = "fdr", 
+                             domain_scope = "custom_annotated", custom_bg = ids_all, 
+                             numeric_ns = "", sources = NULL, as_short_link = FALSE, highlight = TRUE)
+
+gostres_dataframe <- gostres_NMvF_down_hs$result %>%
+  as.data.frame
+gostres_dataframe$parents <- as.character(gostres_dataframe$parents)
+gostres_dataframe <- gostres_dataframe[order(gostres_dataframe$p_value),]
+write.csv(as.data.frame(gostres_dataframe), file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_dataframes/NMvF_hsapiens_down.csv")
+
+gostplot(gostres_NMvF_down_hs, capped = TRUE, interactive = TRUE)
+
+p <- gostplot(gostres_NMvF_down_hs, capped = TRUE, interactive = FALSE)
+publish_gostplot(p, highlight_terms = c("GO:0045291", "GO:0000353", "GO:0000365"), 
+                       width = NA, height = NA, filename = "/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_graphs/NMvF_hsapiens_down.png")
+```
+
+```{r}
+#Multi-query overexpressed:
+multi_gostres_up_hs <- gost(query = list("MvF" = c(ids_MvF_over_cut),
+                             "NMvF" = c(ids_NMvF_over_cut)), 
+                             organism = "hsapiens", ordered_query = FALSE, 
+                             multi_query = TRUE, significant = TRUE, exclude_iea = FALSE, 
+                             measure_underrepresentation = FALSE, evcodes = FALSE, 
+                             user_threshold = 0.01, correction_method = "fdr", 
+                             domain_scope = "custom_annotated", custom_bg = ids_all, 
+                             numeric_ns = "", sources = c("GO:MF", "GO:CC", "GO:BP", "KEGG", "REAC", "TF", "MIRNA", "HPA", "HP", "WP"), as_short_link = FALSE, highlight = TRUE)
+
+multi_gostres_dataframe <- multi_gostres_up_hs$result %>%
+  as.data.frame
+multi_gostres_dataframe$p_values <- as.character(multi_gostres_dataframe$p_values)
+multi_gostres_dataframe$significant <- as.character(multi_gostres_dataframe$significant)
+multi_gostres_dataframe$query_sizes <- as.character(multi_gostres_dataframe$query_sizes)
+multi_gostres_dataframe$intersection_sizes <- as.character(multi_gostres_dataframe$intersection_sizes)
+multi_gostres_dataframe$parents <- as.character(multi_gostres_dataframe$parents)
+multi_gostres_dataframe$highlighted <- as.character(multi_gostres_dataframe$highlighted)
+write.csv(as.data.frame(multi_gostres_dataframe), file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_dataframes/multi_hsapiens_up.csv")
+
+gostplot(multi_gostres_up_hs, capped = TRUE, interactive = TRUE)
+
+p <- gostplot(multi_gostres_up_hs, capped = TRUE, interactive = FALSE)
+publish_gostplot(p, highlight_terms = c("GO:0016020", "GO:0032502", "GO:0048856", "GO:0110165", "GO:0005488"), 
+                       width = NA, height = NA, filename = "/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_graphs/multi_hsapiens_up.png")
+```
+
+```{r}
+#Multi-query underexpressed:
+multi_gostres_down_hs <- gost(query = list("MvF" = c(ids_MvF_under_cut),
+                             "NMvF" = c(ids_NMvF_under_cut)), 
+                             organism = "hsapiens", ordered_query = FALSE, 
+                             multi_query = TRUE, significant = TRUE, exclude_iea = FALSE, 
+                             measure_underrepresentation = FALSE, evcodes = FALSE, 
+                             user_threshold = 0.01, correction_method = "fdr", 
+                             domain_scope = "custom_annotated", custom_bg = ids_all, 
+                             numeric_ns = "", sources = NULL, as_short_link = FALSE, highlight = TRUE)
+
+multi_gostres_dataframe <- multi_gostres_down_hs$result %>%
+  as.data.frame
+multi_gostres_dataframe$p_values <- as.character(multi_gostres_dataframe$p_values)
+multi_gostres_dataframe$significant <- as.character(multi_gostres_dataframe$significant)
+multi_gostres_dataframe$query_sizes <- as.character(multi_gostres_dataframe$query_sizes)
+multi_gostres_dataframe$intersection_sizes <- as.character(multi_gostres_dataframe$intersection_sizes)
+multi_gostres_dataframe$parents <- as.character(multi_gostres_dataframe$parents)
+multi_gostres_dataframe$highlighted <- as.character(multi_gostres_dataframe$highlighted)
+write.csv(as.data.frame(multi_gostres_dataframe), file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_dataframes/multi_hsapiens_down.csv")
+
+gostplot(multi_gostres_down_hs, capped = TRUE, interactive = TRUE)
+
+p <- gostplot(multi_gostres_down_hs, capped = TRUE, interactive = FALSE)
+publish_gostplot(p, highlight_terms = c("GO:0045291", "GO:0000353", "GO:0000365"), 
+                       width = NA, height = NA, filename = "/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_graphs/multi_hsapiens_down.png")
+
+```
+
+### DANIO RERIO
+
+```{r}
+#MvF overexpressed:
+gostres_MvF_up_dr <- gost(query = ids_MvF_over_cut, 
+                            organism = "drerio", ordered_query = FALSE, 
+                            multi_query = FALSE, significant = TRUE, exclude_iea = FALSE, 
+                            measure_underrepresentation = FALSE, evcodes = FALSE,
+                            user_threshold = 0.01, correction_method = "fdr", 
+                            domain_scope = "custom_annotated", custom_bg = ids_all, 
+                            numeric_ns = "", sources = NULL, as_short_link = FALSE, highlight = TRUE)
+
+gostres_dataframe <- gostres_MvF_up_dr$result %>%
+  as.data.frame
+gostres_dataframe$parents <- as.character(gostres_dataframe$parents)
+gostres_dataframe <- gostres_dataframe[order(gostres_dataframe$p_value),]
+write.csv(as.data.frame(gostres_dataframe), file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_dataframes/MvF_drerio_up.csv")
+
+gostplot(gostres_MvF_up_dr, capped = TRUE, interactive = TRUE)
+
+p <- gostplot(gostres_MvF_up_dr, capped = TRUE, interactive = FALSE)
+publish_gostplot(p, highlight_terms = c("GO:0016020", "GO:0032502", "GO:0048856"), 
+                       width = NA, height = NA, filename = "/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_graphs/MvF_drerio_up.png")
+  #Add only the GO term numbers we wish to check
+  #To check the GO term number, use the dataframe result of the gostres object and search for name of term in question
+```
+
+```{r}
+#MvF underexpressed:
+gostres_MVF_down_dr <- gost(query = ids_MvF_under_cut, 
+                             organism = "drerio", ordered_query = FALSE, 
+                             multi_query = FALSE, significant = TRUE, exclude_iea = FALSE, 
+                             measure_underrepresentation = FALSE, evcodes = FALSE,
+                             user_threshold = 0.01, correction_method = "fdr", 
+                             domain_scope = "custom_annotated", custom_bg = ids_all, 
+                             numeric_ns = "", sources = NULL, as_short_link = FALSE, highlight = TRUE)
+
+gostres_dataframe <- gostres_MVF_down_dr$result %>%
+  as.data.frame
+gostres_dataframe$parents <- as.character(gostres_dataframe$parents)
+gostres_dataframe <- gostres_dataframe[order(gostres_dataframe$p_value),]
+write.csv(as.data.frame(gostres_dataframe), file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_dataframes/MvF_drerio_down.csv")
+
+gostplot(gostres_MVF_down_dr, capped = TRUE, interactive = TRUE)
+
+p <- gostplot(gostres_MVF_down_dr, capped = TRUE, interactive = FALSE)
+publish_gostplot(p, highlight_terms = c("GO:0038023", "GO:0060089", "GO:0004888", "GO:0023052", "GO:0007154"), 
+                       width = NA, height = NA, filename = "/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_graphs/MvF_drerio_down.png")
+```
+
+```{r}
+#NMvF overexpressed:
+gostres_NMvF_up_dr <- gost(query = ids_NMvF_over_cut, 
+                            organism = "drerio", ordered_query = FALSE, 
+                            multi_query = FALSE, significant = TRUE, exclude_iea = FALSE, 
+                            measure_underrepresentation = FALSE, evcodes = FALSE,
+                            user_threshold = 0.01, correction_method = "fdr", 
+                            domain_scope = "custom_annotated", custom_bg = ids_all, 
+                            numeric_ns = "", sources = NULL, as_short_link = FALSE, highlight = TRUE)
+
+gostres_dataframe <- gostres_NMvF_up_dr$result %>%
+  as.data.frame
+gostres_dataframe$parents <- as.character(gostres_dataframe$parents)
+gostres_dataframe <- gostres_dataframe[order(gostres_dataframe$p_value),]
+write.csv(as.data.frame(gostres_dataframe), file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_dataframes/NMvF_drerio_up.csv")
+
+gostplot(gostres_NMvF_up_dr, capped = TRUE, interactive = TRUE)
+
+p <- gostplot(gostres_NMvF_up_dr, capped = TRUE, interactive = FALSE)
+publish_gostplot(p, highlight_terms = c("GO:0016020", "GO:0032502", "GO:0048856"), 
+                       width = NA, height = NA, filename = "/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_graphs/NMvF_drerio_up.png")
+```
+
+```{r}
+#NMvF underexpressed:
+gostres_NMvF_down_dr <- gost(query = ids_NMvF_under_cut, 
+                             organism = "drerio", ordered_query = FALSE, 
+                             multi_query = FALSE, significant = TRUE, exclude_iea = FALSE, 
+                             measure_underrepresentation = FALSE, evcodes = FALSE,
+                             user_threshold = 0.001, correction_method = "fdr", 
+                             domain_scope = "custom_annotated", custom_bg = ids_all, 
+                             numeric_ns = "", sources = NULL, as_short_link = FALSE, highlight = TRUE)
+
+gostres_dataframe <- gostres_NMvF_down_dr$result %>%
+  as.data.frame
+gostres_dataframe$parents <- as.character(gostres_dataframe$parents)
+gostres_dataframe <- gostres_dataframe[order(gostres_dataframe$p_value),]
+write.csv(as.data.frame(gostres_dataframe), file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_dataframes/NMvF_drerio_down.csv")
+
+gostplot(gostres_NMvF_down_dr, capped = TRUE, interactive = TRUE)
+
+p <- gostplot(gostres_NMvF_down_dr, capped = TRUE, interactive = FALSE)
+publish_gostplot(p, highlight_terms = c("GO:0038023", "GO:0060089", "GO:0004888", "GO:0023052", "GO:0007154"), 
+                       width = NA, height = NA, filename = "/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_graphs/NMvF_drerio_down.png")
+```
+
+```{r}
+#Multi-query overexpressed:
+multi_gostres_up_dr <- gost(query = list("MvF" = c(ids_MvF_over_cut),
+                             "NMvF" = c(ids_NMvF_over_cut)), 
+                             organism = "drerio", ordered_query = FALSE, 
+                             multi_query = TRUE, significant = TRUE, exclude_iea = FALSE, 
+                             measure_underrepresentation = FALSE, evcodes = FALSE, 
+                             user_threshold = 0.01, correction_method = "fdr", 
+                             domain_scope = "custom_annotated", custom_bg = ids_all, 
+                             numeric_ns = "", sources = c("GO:MF", "GO:CC", "GO:BP", "KEGG", "REAC", "WP"), as_short_link = FALSE, highlight = TRUE)
+
+multi_gostres_dataframe <- multi_gostres_up_dr$result %>%
+  as.data.frame
+multi_gostres_dataframe$p_values <- as.character(multi_gostres_dataframe$p_values)
+multi_gostres_dataframe$significant <- as.character(multi_gostres_dataframe$significant)
+multi_gostres_dataframe$query_sizes <- as.character(multi_gostres_dataframe$query_sizes)
+multi_gostres_dataframe$intersection_sizes <- as.character(multi_gostres_dataframe$intersection_sizes)
+multi_gostres_dataframe$parents <- as.character(multi_gostres_dataframe$parents)
+multi_gostres_dataframe$highlighted <- as.character(multi_gostres_dataframe$highlighted)
+write.csv(as.data.frame(multi_gostres_dataframe), file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_dataframes/multi_drerio_up.csv")
+
+gostplot(multi_gostres_up_dr, capped = TRUE, interactive = TRUE)
+
+p <- gostplot(multi_gostres_up_dr, capped = TRUE, interactive = FALSE)
+publish_gostplot(p, highlight_terms = c("GO:0016020", "GO:0032502", "GO:0048856"), 
+                       width = NA, height = NA, filename = "/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_graphs/multi_drerio_up.png")
+```
+
+```{r}
+#Multi-query underexpressed:
+multi_gostres_down_dr <- gost(query = list("MvF" = c(ids_MvF_under_cut),
+                             "NMvF" = c(ids_NMvF_under_cut)), 
+                             organism = "drerio", ordered_query = FALSE, 
+                             multi_query = TRUE, significant = TRUE, exclude_iea = FALSE, 
+                             measure_underrepresentation = FALSE, evcodes = FALSE, 
+                             user_threshold = 0.01, correction_method = "fdr", 
+                             domain_scope = "custom_annotated", custom_bg = ids_all,
+                             numeric_ns = "", sources = c("GO:CC", "GO:BP", "KEGG", "REAC", "TF", "WP"), as_short_link = FALSE, highlight = TRUE)
+
+multi_gostres_dataframe <- multi_gostres_down_dr$result %>%
+  as.data.frame
+multi_gostres_dataframe$p_values <- as.character(multi_gostres_dataframe$p_values)
+multi_gostres_dataframe$significant <- as.character(multi_gostres_dataframe$significant)
+multi_gostres_dataframe$query_sizes <- as.character(multi_gostres_dataframe$query_sizes)
+multi_gostres_dataframe$intersection_sizes <- as.character(multi_gostres_dataframe$intersection_sizes)
+multi_gostres_dataframe$parents <- as.character(multi_gostres_dataframe$parents)
+multi_gostres_dataframe$highlighted <- as.character(multi_gostres_dataframe$highlighted)
+write.csv(as.data.frame(multi_gostres_dataframe), file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_dataframes/multi_drerio_down.csv")
+
+gostplot(multi_gostres_down_dr, capped = TRUE, interactive = TRUE)
+
+p <- gostplot(multi_gostres_down_dr, capped = TRUE, interactive = FALSE)
+publish_gostplot(p, highlight_terms = c("GO:0038023", "GO:0060089", "GO:0004888", "GO:0023052", "GO:0007186"), 
+                       width = NA, height = NA, filename = "/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/gProfiler/def_graphs/multi_drerio_down.png")
+
+```
+

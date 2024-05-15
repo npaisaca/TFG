@@ -1,0 +1,281 @@
+---
+title: "Graphical analysis"
+author: "Núria Paisano Cabrera"
+date: "March 2024"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = FALSE)
+```
+
+### Software used
+
+- R v4.3.3
+
+Packages:
+
+- DESeq2 1.40.2
+- dplyr 1.1.4
+- ggplot2 3.5.0
+- ggrepel 0.9.5
+- tidyverse 2.0.0
+- vsn 3.68.0
+- EnhancedVolcano 1.18.0
+
+
+## LOAD PACKAGES
+
+If we are installing packages for the first time:
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install("packagename")
+```
+
+Loading packages:
+```{r}
+lapply(c("DESeq2", "dplyr", "ggplot2", "ggrepel", "tidyverse", "vsn", "EnhancedVolcano"), library, character.only=TRUE)
+  #DESeq2: differential expression analysis
+  #vsn: extraction of normalized vaules
+  #dplyr/tidyverse: allows data manipulation
+  #ggplot2/ggrepel/EnhancedVolcano: graphs
+```
+
+_NOTE: Sometimes the ggplot package gives an error if DESeq2 is loaded. If this happens unload DESeq2:_
+```{r}
+detach("package:DESeq2", unload=TRUE)
+```
+
+
+## MA-PLOT
+
+Transform results into dataframe:
+```{r}
+SeabassFM_DE <- results(SeabassFM_DE, contrast = c("Sex",'M','F'), alpha=0.01) %>%
+  as.data.frame
+
+SeabassNMM_DE <- results(SeabassNMM_DE, contrast = c("Sex",'NM','M'), alpha=0.01) %>%
+  as.data.frame
+
+SeabassFNM_DE <- results(SeabassFNM_DE, contrast = c("Sex",'NM','F'), alpha=0.01) %>%
+  as.data.frame
+```
+
+MA plots:
+```{r}
+iv.sig <- SeabassFM_DE$padj < 0.01
+iv.up <- SeabassFM_DE$log2FoldChange > 2 & iv.sig
+iv.dn <- SeabassFM_DE$log2FoldChange < -2 & iv.sig
+plot(log2(SeabassFM_DE$baseMean + 1), SeabassFM_DE$log2FoldChange, pch=20, col="grey",
+     main="Males vs Females", xlab="log2(baseMean)", ylab="Log2FC") + points(log2(SeabassFM_DE$baseMean + 1)[iv.up], SeabassFM_DE$log2FoldChange[iv.up], col="blue", pch=20) + points(log2(SeabassFM_DE$baseMean + 1)[iv.dn], SeabassFM_DE$log2FoldChange[iv.dn], col="red3", pch=20) + abline(h=c(-2,2), col="cyan4", lwd=2) + abline(h=0, col="gray50", lwd=3)
+
+iv.sig <- SeabassNMM_DE$padj < 0.01
+iv.up <- SeabassNMM_DE$log2FoldChange > 2 & iv.sig
+iv.dn <- SeabassNMM_DE$log2FoldChange < -2 & iv.sig
+plot(log2(SeabassNMM_DE$baseMean + 1), SeabassNMM_DE$log2FoldChange, pch=20, col="grey",
+     main="Neomales vs Males", xlab="log2(baseMean)", ylab="Log2FC") + points(log2(SeabassNMM_DE$baseMean + 1)[iv.up], SeabassNMM_DE$log2FoldChange[iv.up], col="blue", pch=20) + points(log2(SeabassNMM_DE$baseMean + 1)[iv.dn], SeabassNMM_DE$log2FoldChange[iv.dn], col="red3", pch=20) + abline(h=c(-2,2), col="cyan4", lwd=2) + abline(h=0, col="gray50", lwd=3)
+
+iv.sig <- SeabassFNM_DE$padj < 0.01
+iv.up <- SeabassFNM_DE$log2FoldChange > 2 & iv.sig
+iv.dn <- SeabassFNM_DE$log2FoldChange < -2 & iv.sig
+plot(log2(SeabassFNM_DE$baseMean + 1), SeabassFNM_DE$log2FoldChange, pch=20, col="grey",
+     main="Neomales vs Females", xlab="log2(baseMean)", ylab="Log2FC") + points(log2(SeabassFNM_DE$baseMean + 1)[iv.up], SeabassFNM_DE$log2FoldChange[iv.up], col="blue", pch=20) + points(log2(SeabassFNM_DE$baseMean + 1)[iv.dn], SeabassFNM_DE$log2FoldChange[iv.dn], col="red3", pch=20) + abline(h=c(-2,2), col="cyan4", lwd=2) + abline(h=0, col="gray50", lwd=3)
+```
+
+**REMEMBER TO SAVE THE GRAPHS AS IMAGE FILES (EG JPEG)**
+
+
+## MODEL DISPERSION PLOT
+
+Extracting transformed (normalized) values:
+```{r}
+vsd <- vst(SeabassFNM_DE, blind=FALSE)
+rld <- rlog(SeabassFNM_DE, blind=FALSE)
+head(assay(vsd), 3)
+```
+
+Effects of transformation on the variance (this gives log2(n+1)):
+```{r}
+ntd <- normTransform(SeabassFNM_DE)
+
+meanSdPlot(assay(ntd), xlab = "mean ntd", ylab = "sd ntd")
+
+meanSdPlot(assay(vsd), xlab = "mean vsd", ylab = "sd vsd")
+
+meanSdPlot(assay(rld), xlab = "mean rld", ylab = "sd rld")
+```
+
+Model dispersion plot:
+```{r}
+plotDispEsts(SeabassFM_DE, main = "Males vs Females")
+plotDispEsts(SeabassNMM_DE, main = "Neomales vs Males")
+plotDispEsts(SeabassFNM_DE, main = "Neomales vs Females")
+```
+
+**REMEMBER TO SAVE THE GRAPHS AS IMAGE FILES (EG JPEG)**
+
+
+## VOLCANO PLOT
+
+```{r}
+library(EnhancedVolcano)
+
+EnhancedVolcano(SeabassFM_DE,
+                lab = rownames(SeabassFM_DE),
+                x = 'log2FoldChange',
+                y = 'padj',
+                axisLabSize = 11.0,
+                title = 'Male vs Female',
+                subtitleLabSize = 0.0,
+                caption = bquote(~Log[2]~ "fold change cutoff, 2; p-value cutoff, 0,01"),
+                captionLabSize = 11.0,
+                pCutoff = 0.01,   #pvalue of 0.01
+                FCcutoff = 2,   #Fold Change of 2
+                pointSize = 1.0,
+                labSize = 0.0,
+                legendLabels=c('Not sig.', 'Log2 FC', 'p-value', 'p-value & Log2 FC'),
+                legendPosition = 'right',
+                legendLabSize = 8.0,
+                legendIconSize = 3.0)
+
+EnhancedVolcano(SeabassNMM_DE,
+                lab = rownames(SeabassNMM_DE),
+                x = 'log2FoldChange',
+                y = 'padj',
+                axisLabSize = 11.0,
+                title = 'Neomale vs Male',
+                subtitleLabSize = 0.0,
+                caption = bquote(~Log[2]~ "fold change cutoff, 2; p-value cutoff, 0,01"),
+                captionLabSize = 11.0,
+                pCutoff = 0.01,
+                FCcutoff = 2,
+                pointSize = 1.0,
+                labSize = 0.0,
+                legendLabels=c('Not sig.', 'Log2 FC', 'p-value', 'p-value & Log2 FC'),
+                legendPosition = 'right',
+                legendLabSize = 8.0,
+                legendIconSize = 3.0)
+
+EnhancedVolcano(SeabassFNM_DE,
+                lab = rownames(SeabassFNM_DE),
+                x = 'log2FoldChange',
+                y = 'padj',
+                axisLabSize = 11.0,
+                title = 'Neomale vs Female',
+                subtitleLabSize = 0.0,
+                caption = bquote(~Log[2]~ "fold change cutoff, 2; p-value cutoff, 0,01"),
+                captionLabSize = 8.0,
+                pCutoff = 0.01,
+                FCcutoff = 2,
+                pointSize = 1.0,
+                labSize = 0.0,
+                legendLabels=c('Not sig.', 'Log2 FC', 'p-value', 'p-value & Log2 FC'),
+                legendPosition = 'right',
+                legendLabSize = 8.0,
+                legendIconSize = 3.0)
+```
+
+**REMEMBER TO SAVE THE GRAPHS AS IMAGE FILES (EG JPEG)**
+
+
+## HIGHEST LOG FOLD CHANGE VISUALIZATION
+```{r}
+ggplot(MvF_overexpr, aes(log2(padj), log2FoldChange)) +
+  geom_point(aes(colour = MvF_overexpr$`ids_MvF$X.1`), size = 2.5) +
+  theme(legend.position="none") + 
+  expand_limits(x=c(100,-600), y=c(5,15)) +
+  geom_label_repel(
+    label=MvF_overexpr$`ids_MvF$X.1`,
+    aes(log2(padj), log2FoldChange, colour = MvF_overexpr$`ids_MvF$X.1`),
+    max.overlaps=Inf,
+    force = 30,
+    segment.color = "grey80"
+  )
+
+ggplot(MvF_underexpr, aes(log2(padj), log2FoldChange)) +
+  geom_point(aes(colour = MvF_underexpr$`ids_MvF$X.1`), size = 2.5) +
+  theme(legend.position="none") + 
+  expand_limits(x=c(0,-600), y=c(-12, -9)) +
+  geom_label_repel(
+    label=MvF_underexpr$`ids_MvF$X.1`,
+    aes(log2(padj), log2FoldChange, colour = MvF_underexpr$`ids_MvF$X.1`),
+    max.overlaps=Inf,
+    force = 40,
+    segment.color = "grey80"
+  ) +
+  scale_y_continuous(trans = "reverse")
+
+ggplot(NMvF_overexpr, aes(log2(padj), log2FoldChange)) +
+  geom_point(aes(colour = NMvF_overexpr$`ids_NMvF$X.1`), size = 2.5) +
+  theme(legend.position="none") + 
+  expand_limits(x=c(100,-600), y=c(5,15)) +
+  geom_label_repel(
+    label=NMvF_overexpr$`ids_NMvF$X.1`,
+    aes(log2(padj), log2FoldChange, colour = NMvF_overexpr$`ids_NMvF$X.1`),
+    max.overlaps=Inf,
+    force = 30,
+    segment.color = "grey80"
+  )
+
+ggplot(NMvF_underexpr[-c(12),], aes(log2(padj), log2FoldChange)) +
+  geom_point(aes(colour = NMvF_underexpr[-c(12),]$`ids_NMvF$X.1`), size = 2.5) +
+  theme(legend.position="none") + 
+  expand_limits(x=c(0,-800), y=c(-12, -8)) +
+  geom_label_repel(
+    label=NMvF_underexpr[-c(12),]$`ids_NMvF$X.1`,
+    aes(log2(padj), log2FoldChange, colour = NMvF_underexpr[-c(12),]$`ids_NMvF$X.1`),
+    max.overlaps=Inf,
+    force = 40,
+    segment.color = "grey80"
+  ) +
+  scale_y_continuous(trans = "reverse")
+
+ggplot(NMvM_overexpr, aes(log2(padj), log2FoldChange)) +
+  geom_point(aes(colour = NMvM_overexpr$`ids_NMvM$X.1`), size = 2.5) +
+  theme(legend.position="none") + 
+  geom_label_repel(
+    label=NMvM_overexpr$`ids_NMvM$X.1`,
+    aes(log2(padj), log2FoldChange, colour = NMvM_overexpr$`ids_NMvM$X.1`),
+    max.overlaps=Inf,
+    force = 50,
+    segment.color = "grey80"
+  )
+
+```
+
+**REMEMBER TO SAVE THE GRAPHS AS IMAGE FILES (EG JPEG)**
+
+## GO ENRICHMENT SCATTERPLOT
+
+MvF homo sapiens up:
+```{r}
+KEGGM <- gostres_MvF_up_hs$result %>%
+  as.data.frame
+KEGGM <- filter(KEGGM, KEGGM$source == "KEGG")
+
+ggplot(KEGGM, aes(x=recall, y=term_name, color= KEGGM$p_value, size = KEGGM$intersection_size)) + 
+  geom_point() + 
+  labs(colour = "p-value",
+       size = "Number of genes") + 
+  theme(legend.position = "right") +
+  ggtitle("Upregulated genes in Males vs Females") + 
+  xlab("Enrichment factor") + ylab("KEGG pathway")
+```
+
+NMvF homo sapiens up:
+```{r}
+KEGGNM <- gostres_NMvF_up_hs$result %>%
+  as.data.frame
+KEGGNM <- filter(KEGGNM, KEGGNM$source == "KEGG")
+
+ggplot(KEGGNM, aes(x=recall, y=term_name, color= KEGGNM$p_value, size = KEGGNM$intersection_size)) + 
+  geom_point() + 
+  labs(colour = "p-value",
+       size = "Number of genes") + 
+  theme(legend.position = "right") +
+  ggtitle("Upregulated genes in Neomales vs Females") + 
+  xlab("Enrichment factor") + ylab("KEGG pathway")
+```

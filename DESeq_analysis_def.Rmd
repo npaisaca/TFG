@@ -1,0 +1,476 @@
+---
+title: "Differential Expression Analysis"
+author: "Núria Paisano Cabrera"
+date: "January-February 2024"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = FALSE)
+```
+
+### Software used
+
+- R v4.3.3
+
+Packages:
+
+- DESeq2 1.40.2
+- dplyr 1.1.4
+- ggplot2 3.5.0
+- ggrepel 0.9.5
+- tidyverse 2.0.0
+- apeglm 1.22.1
+
+Based on: <http://127.0.0.1:18001/library/DESeq2/doc/DESeq2.html>
+
+
+## SET WORKING DIRECTORY
+
+```{r}
+setwd("~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv")
+```
+
+(Alternatively we can click the 3 dots on the interface on the bottom right and choose manually)
+
+
+## LOAD PACKAGES
+
+If we are installing packages for the first time:
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install("packagename")
+```
+
+Loading packages:
+```{r}
+lapply(c("DESeq2", "dplyr", "tidyverse"), library, character.only=TRUE)
+  #DESeq2: differential expression analysis
+  #dplyr/tidyverse: allows data manipulation
+```
+_NOTE: for now we're only loading the packages we are going to use below. Other packages, if needed, will be loaded in their corresponding sections._
+
+
+## DATA IMPORT
+
+CSV with RNA counts:
+```{r}
+RNAcounts <- read.csv2("~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/RNAcounts_def.csv", sep = ",", row.names = 1, header = TRUE)
+head(RNAcounts)
+```
+
+CSV with experiment design:
+```{r}
+exp_des <- read.csv2("~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/exp_des_2.csv",  sep = ",", header = TRUE)
+head(exp_des)
+```
+
+Check both CSVs coincide:
+```{r}
+all(rownames(exp_des) == colnames(RNAcounts))
+```
+
+If result is FALSE:
+```{r}
+colnames(RNAcounts)<-exp_des$Sample_ID #this changes all column names of RNAcounts to row names of experiment
+```
+_NOTE: BE CAREFUL to not change names of samples for names of other samples!! just check the spelling is the same in both cases._
+
+
+## PCA
+
+Before comparison in pairs, we perform a general PCA to detect any outliers. To do so we create a global DESeq2 object and graph the results.
+
+**THE INSTRUCTIONS BELOW WERE RUN ONCE FOR A GLOBAL OVERVIEW, AND THEN RE-RUN WITHOUT SAMPLES 634 AND 1190 (OUTLIERS)**
+```{r}
+#Creation of the DESEQ2 object:
+Seabass <- DESeqDataSetFromMatrix(countData = RNAcounts,
+                                  colData = exp_des,
+                                  design = ~ Sex)
+
+#Transformation into DeSeqTransform object:
+rlog <- rlog(Seabass, blind = TRUE, fitType = "parametric")
+
+#PCA plot:
+pcaData <- plotPCA(rlog, intgroup=c("Sex"), returnData=TRUE)   #saves the PCA data
+percentVar <- round(100 * attr(pcaData, "percentVar"))   #saves the PC percentage
+ggplot(pcaData, aes(PC1, PC2, color=Sex)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  coord_fixed()
+  #Note: make sure to list ALL columns in the dataframe in intgroup, if needed uncomment the instruction below to check
+#colData(rlog)
+
+#NOTE: if some samples are outliers they should be removed from the original csv documents and the PCA should be re-run
+
+```
+
+**REMEMBER TO SAVE THE GRAPH AS AN IMAGE FILE (EG JPEG)**
+
+PCAs of pair comparisons can be done by substituting the Seabass object of the instructions above with the DESeq2 objects created below.
+
+
+## ELIMINATION OF OUTLIER SAMPLES
+```{r}
+RNAcounts <- RNAcounts[,-c(3,24)]
+colnames(RNAcounts)<-exp_des$Sample_ID
+write.csv(as.data.frame(RNAcounts), file="~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/RNAcounts_2_def.csv")
+RNAcounts <- read.csv2("~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/RNAcounts_2_def.csv", sep = ",", row.names = 1, header = TRUE)
+
+exp_des <- exp_des[-c(3,24)]
+write.csv(as.data.frame(exp_des), file="~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/exp_des_2_def.csv")
+exp_des <- read.csv2("~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/exp_des_2_def.csv", sep = ",", row.names = 1, header = TRUE)
+
+colnames(RNAcounts)<-exp_des$Sample_ID
+
+```
+
+
+## CREATION OF SEX-SPECIFIC CSVs
+
+The DESeq package in itself does not allow to filter according to sex. To perform a partial study, then, we need sex-specific CSVs that allow us to analyse only two of the three sexes. The three comparisons we will make are Male vs Female (F is the control), Neomale vs Male (M is the control), and Neomale vs Female (F is the control.
+```{r}
+#EXP_DES:
+  #Female vs male:
+exp_des_FM <- filter(exp_des, !Sex %in% "NM")
+    #Creation of the exp_des dataset containing only the female and male data
+
+write.csv(as.data.frame(exp_des_FM), file="~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/exp_des_FM.csv")
+   #Conversion of dataset into a csv file
+
+exp_des_FM <- read.csv("~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/exp_des_FM.csv", sep = ",", row.names = 1, header = TRUE)
+head(exp_des_FM)
+    #Loading the new file
+
+
+  #Neomale vs male:
+exp_des_NMM <- filter(exp_des, !Sex %in% "F")
+
+write.csv(as.data.frame(exp_des_NMM), file="~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/exp_des_NMM.csv")
+
+exp_des_NMM <- read.csv("~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/exp_des_NMM.csv", row.names = 1, header = TRUE)
+head(exp_des_NMM)
+
+
+  #Female vs neomale:
+exp_des_FNM <- filter(exp_des, !Sex %in% "M")
+
+write.csv(as.data.frame(exp_des_FNM), file="~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/exp_des_FNM.csv")
+
+exp_des_FNM <- read.csv("~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/exp_des_FNM.csv", row.names = 1, header = TRUE)
+head(exp_des_FNM)
+
+
+#RNACOUNTS:
+females <- filter(exp_des, Sex == "F")
+females <- females$Sample_ID
+
+males <- filter(exp_des, Sex == "M")
+males <- males$Sample_ID
+
+neomales <- filter(exp_des, Sex == "NM")
+neomales <- neomales$Sample_ID
+  #Creation of vectors with the name of the data to filter the RNAcounts document
+
+#Female vs male:
+write.csv(as.data.frame(RNAcounts),file="~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/RNAcounts_FM.csv")
+RNAcounts_FM <- read.csv("~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/RNAcounts_FM.csv", row.names = 1, header = TRUE)
+colnames(RNAcounts_FM)<-exp_des_FM$Sample_ID
+  #Creation of the RNAcounts dataset that eventually will only contain the female and male data
+
+RNAcounts_FM <- RNAcounts_FM[,!names(RNAcounts_FM) %in% neomales]
+  #Elimination of the extra columns according to the vectors
+
+write.csv(as.data.frame(RNAcounts_FM),file="~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/RNAcounts_FM.csv")
+
+
+#Neomale vs male:
+write.csv(as.data.frame(RNAcounts),file="~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/RNAcounts_NMM.csv")
+RNAcounts_NMM <- read.csv("~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/RNAcounts_NMM.csv", row.names = 1, header = TRUE)
+colnames(RNAcounts_NMM)<-exp_des_NMM$Sample_ID
+
+RNAcounts_NMM <- RNAcounts_NMM[,!names(RNAcounts_NMM) %in% females]
+
+write.csv(as.data.frame(RNAcounts_NMM),file="~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/RNAcounts_NMM.csv")
+
+
+#Female vs neomale:
+write.csv(as.data.frame(RNAcounts),file="~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/RNAcounts_FNM.csv")
+RNAcounts_FNM <- read.csv("~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/RNAcounts_FNM.csv", row.names = 1, header = TRUE)
+colnames(RNAcounts_FNM)<-exp_des_FNM$Sample_ID
+
+RNAcounts_FNM <- RNAcounts_FNM[,!names(RNAcounts_FNM) %in% males]
+
+write.csv(as.data.frame(RNAcounts_FNM),file="~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/RNAcounts_FNM.csv")
+```
+
+
+## DESEQ2 ANALYSIS
+
+MALE VS FEMALE:
+```{r}
+#Creation of the DESEQ2 object:
+SeabassFM <- DESeqDataSetFromMatrix(countData = RNAcounts_FM,
+                                   colData = exp_des_FM,
+                                   design = ~ Sex)
+
+#Differential expression analysis:
+SeabassFM_DE <- DESeq(SeabassFM)
+
+#Filtering:
+keep <- rowSums(counts(SeabassFM_DE))>= 10   #Eliminates all rows with less than 10 counts
+SeabassFM_DE <- SeabassFM_DE[keep,]
+
+#Elimination of NA values:
+SeabassFM_DE <- na.exclude(SeabassFM_DE)
+```
+
+NEOMALE VS MALE:
+```{r}
+#Creation of the DESEQ2 object:
+SeabassNMM <- DESeqDataSetFromMatrix(countData = RNAcounts_NMM,
+                                    colData = exp_des_NMM,
+                                    design = ~ Sex)
+
+#Differential expression analysis:
+SeabassNMM_DE <- DESeq(SeabassNMM)
+
+#Filtering:
+keep <- rowSums(counts(SeabassNMM_DE))>= 10   #Eliminates all rows with less than 10 counts
+SeabassNMM_DE <- SeabassNMM_DE[keep,]
+
+#Elimination of NA values:
+SeabassNMM_DE <- na.exclude(SeabassNMM_DE)
+```
+
+NEOMALE VS FEMALE:
+```{r}
+#Creation of the DESEQ2 object:
+SeabassFNM <- DESeqDataSetFromMatrix(countData = RNAcounts_FNM,
+                                     colData = exp_des_FNM,
+                                     design = ~ Sex)
+
+#Differential expression analysis:
+SeabassFNM_DE <- DESeq(SeabassFNM)
+
+#Filtering:
+keep <- rowSums(counts(SeabassFNM_DE))>= 10   #Eliminates all rows with less than 10 counts
+SeabassFNM_DE <- SeabassFNM_DE[keep,]
+
+#Elimination of NA values:
+SeabassFNM_DE <- na.exclude(SeabassFNM_DE)
+```
+
+
+## PARAMETER ADJUSTMENT
+
+Before proceeding to analysis it's good to compare the DEGs detected with different parameters (p-value 0.05, 0.01 or 0.001 and FC 1.5 or 2) and choose the adequate combination.
+
+MALES VS FEMALES:
+
+```{r}
+SeabassFM_05 <- results(SeabassFM_DE, contrast = c("Sex",'M','F'), alpha=0.05)
+SeabassFM_05 <- as.data.frame(SeabassFM_05)
+p05_15_FM <- sum(SeabassFM_05$padj < 0.05 & (SeabassFM_05$log2FoldChange <= -1.5 | SeabassFM_05$log2FoldChange >= 1.5), na.rm=TRUE)
+p05_2_FM <- sum(SeabassFM_05$padj < 0.05 & (SeabassFM_05$log2FoldChange <= -2 | SeabassFM_05$log2FoldChange >= 2), na.rm=TRUE)
+
+SeabassFM_01 <- results(SeabassFM_DE, contrast = c("Sex",'M','F'), alpha=0.01)
+SeabassFM_01 <- as.data.frame(SeabassFM_01)
+p01_15_FM <- sum(SeabassFM_01$padj < 0.01 & (SeabassFM_01$log2FoldChange <= -1.5 | SeabassFM_01$log2FoldChange >= 1.5), na.rm=TRUE)
+p01_2_FM <- sum(SeabassFM_01$padj < 0.01 & (SeabassFM_01$log2FoldChange <= -2 | SeabassFM_01$log2FoldChange >= 2), na.rm=TRUE)
+
+SeabassFM_001 <- results(SeabassFM_DE, contrast = c("Sex",'M','F'), alpha=0.001)
+SeabassFM_001 <- as.data.frame(SeabassFM_001)
+p001_15_FM <- sum(SeabassFM_001$padj < 0.001 & (SeabassFM_001$log2FoldChange <= -1.5 | SeabassFM_001$log2FoldChange >= 1.5), na.rm=TRUE)
+p001_2_FM <- sum(SeabassFM_001$padj < 0.001 & (SeabassFM_001$log2FoldChange <= -2 | SeabassFM_001$log2FoldChange >= 2), na.rm=TRUE)
+
+```
+
+
+NEOMALES VS FEMALES:
+
+```{r}
+SeabassFNM_05 <- results(SeabassFNM_DE, contrast = c("Sex",'NM','F'), alpha=0.05)
+SeabassFNM_05 <- as.data.frame(SeabassFNM_05)
+p05_15_FNM <- sum(SeabassFNM_05$padj < 0.05 & (SeabassFNM_05$log2FoldChange <= -1.5 | SeabassFNM_05$log2FoldChange >= 1.5), na.rm=TRUE)
+p05_2_FNM <- sum(SeabassFNM_05$padj < 0.05 & (SeabassFNM_05$log2FoldChange <= -2 | SeabassFNM_05$log2FoldChange >= 2), na.rm=TRUE)
+
+SeabassFNM_01 <- results(SeabassFNM_DE, contrast = c("Sex",'NM','F'), alpha=0.01)
+SeabassFNM_01 <- as.data.frame(SeabassFNM_01)
+p01_15_FNM <- sum(SeabassFNM_01$padj < 0.01 & (SeabassFNM_01$log2FoldChange <= -1.5 | SeabassFNM_01$log2FoldChange >= 1.5), na.rm=TRUE)
+p01_2_FNM <- sum(SeabassFNM_01$padj < 0.01 & (SeabassFNM_01$log2FoldChange <= -2 | SeabassFNM_01$log2FoldChange >= 2), na.rm=TRUE)
+
+SeabassFNM_001 <- results(SeabassFNM_DE, contrast = c("Sex",'NM','F'), alpha=0.001)
+SeabassFNM_001 <- as.data.frame(SeabassFNM_001)
+p001_15_FNM <- sum(SeabassFNM_001$padj < 0.001 & (SeabassFNM_001$log2FoldChange <= -1.5 | SeabassFNM_001$log2FoldChange >= 1.5), na.rm=TRUE)
+p001_2_FNM <- sum(SeabassFNM_001$padj < 0.001 & (SeabassFNM_001$log2FoldChange <= -2 | SeabassFNM_001$log2FoldChange >= 2), na.rm=TRUE)
+
+```
+
+
+NEOMALES VS MALES:
+
+```{r}
+SeabassNMM_05 <- results(SeabassNMM_DE, contrast = c("Sex",'NM','M'), alpha=0.05)
+SeabassNMM_05 <- as.data.frame(SeabassNMM_05)
+p05_15_NMM <- sum(SeabassNMM_05$padj < 0.05 & (SeabassNMM_05$log2FoldChange <= -1.5 | SeabassNMM_05$log2FoldChange >= 1.5), na.rm=TRUE)
+p05_2_NMM <- sum(SeabassNMM_05$padj < 0.05 & (SeabassNMM_05$log2FoldChange <= -2 | SeabassNMM_05$log2FoldChange >= 2), na.rm=TRUE)
+
+SeabassNMM_01 <- results(SeabassNMM_DE, contrast = c("Sex",'NM','M'), alpha=0.01)
+SeabassNMM_01 <- as.data.frame(SeabassNMM_01)
+p01_15_NMM <- sum(SeabassNMM_01$padj < 0.01 & (SeabassNMM_01$log2FoldChange <= -1.5 | SeabassNMM_01$log2FoldChange >= 1.5), na.rm=TRUE)
+p01_2_NMM <- sum(SeabassNMM_01$padj < 0.01 & (SeabassNMM_01$log2FoldChange <= -2 | SeabassNMM_01$log2FoldChange >= 2), na.rm=TRUE)
+
+SeabassNMM_001 <- results(SeabassNMM_DE, contrast = c("Sex",'NM','M'), alpha=0.001)
+SeabassNMM_001 <- as.data.frame(SeabassNMM_001)
+p001_15_NMM <- sum(SeabassNMM_001$padj < 0.001 & (SeabassNMM_001$log2FoldChange <= -1.5 | SeabassNMM_001$log2FoldChange >= 1.5), na.rm=TRUE)
+p001_2_NMM <- sum(SeabassNMM_001$padj < 0.001 & (SeabassNMM_001$log2FoldChange <= -2 | SeabassNMM_001$log2FoldChange >= 2), na.rm=TRUE)
+
+```
+
+After consideration of the results, the parameters chosen were **p-value = 0.01** and **FC = 2**.
+
+
+## FINAL FILTERING
+
+Comparison between classes:
+```{r}
+MvF <- results(SeabassFM_DE, contrast = c("Sex",'M','F'), alpha=0.01) #compares results of the 2 conditions
+MvF_res <- as.data.frame(MvF) #transforms results into a data frame
+MvF_res <- na.exclude(MvF_res) #eliminates NA results from matrix
+head(MvF_res)
+
+NMvM <- results(SeabassNMM_DE, contrast = c("Sex",'NM','M'), alpha=0.01)
+NMvM_res <- as.data.frame(NMvM)
+NMvM_res <- na.exclude(NMvM_res)
+head(NMvM_res)
+
+NMvF <- results(SeabassFNM_DE, contrast = c("Sex",'NM','F'), alpha=0.01)
+NMvF_res <- as.data.frame(NMvF)
+NMvF_res <- na.exclude(NMvF_res)
+head(NMvF_res)
+```
+
+Elimination of the non-significant rows:
+```{r}
+MvF_res <- filter(MvF_res, padj < 0.01 & (log2FoldChange <= -2 | log2FoldChange >= 2), na.rm=TRUE)
+head(MvF_res)
+
+NMvM_res <- filter(NMvM_res, padj < 0.01 & (log2FoldChange <= -2 | log2FoldChange >= 2))
+head(NMvM_res)
+
+NMvF_res <- filter(NMvF_res, padj < 0.01 & (log2FoldChange <= -2 | log2FoldChange >= 2))
+head(NMvF_res)
+```
+
+
+## EXPORTING RESULTS
+
+```{r}
+write.csv(as.data.frame(MvF_res), file="~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/Male_vs_Female.csv")
+write.csv(as.data.frame(MvF_res), file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/results/Male_vs_Female.csv")
+
+write.csv(as.data.frame(NMvM_res), file="~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/Neomale_vs_Male.csv")
+write.csv(as.data.frame(NMvM_res), file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/results/Neomale_vs_Male.csv")
+
+write.csv(as.data.frame(NMvF_res), file="~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/Neomale_vs_Female.csv")
+write.csv(as.data.frame(NMvF_res), file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/results/Neomale_vs_Female.csv")
+```
+
+
+## FURHTER FILE MODIFICATIONS
+
+Most software programs require the gene ID to be the generalized name or symbol. Therefore, before inputting any results, we must create alternative files with the gene names of our DEGs for easy uploading or copy-pasting.
+```{r}
+#STEP 1: Open the file hg_CombinedAnnotation_seabassV1.0.txt and convert to csv. Save a copy. Delete all columns except gene ID and symbol.
+
+#STEP 2: Remove all underscores (_) manually (with function find and replace). Be careful not to eliminate the underscores of the gene IDs (eg DLAgn_00215230).
+
+#STEP 3:
+#Upload the modified file:
+ids <- read.csv2("/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/hg_CombinedAnnotation_seabassV1.0_ids.csv", sep = ",")
+
+#Create list with all gene symbols detected in the analysis (not just the DEGs):
+ids_all <- subset(ids, X.1 != "-")   #we eliminate the NA values for clearer input in other software
+ids_all <- ids_all$X.1
+cat(ids_all,file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/ids_all.txt",sep="\n")
+
+#MvF DEGs:
+MvFsign <- rownames(MvF_res)
+ids_MvF <- subset(ids, X %in% MvFsign)
+write.csv(as.data.frame(ids_MvF),file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/ids_MvF.csv")
+ids_MvF_cut <- subset(ids_MvF, X.1 != "-")
+ids_MvF_cut <- ids_MvF_cut$X.1
+cat(ids_MvF_cut,file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/MvFsign.txt",sep="\n")
+
+#NMvF DEGs:
+NMvFsign <- rownames(NMvF_res)
+ids_NMvF <- subset(ids, X %in% NMvFsign)
+write.csv(as.data.frame(ids_NMvF),file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/ids_NMvF.csv")
+ids_NMvF_cut <- subset(ids_NMvF, X.1 != "-")
+ids_NMvF_cut <- ids_NMvF_cut$X.1
+cat(ids_NMvF_cut,file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/NMvFsign.txt",sep="\n")
+
+#NMvM DEGs:
+NMvMsign <- rownames(NMvM_res)
+ids_NMvM <- subset(ids, X %in% NMvMsign)
+write.csv(as.data.frame(ids_NMvM),file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/ids_NMvM.csv")
+ids_NMvM_cut <- subset(ids_NMvM, X.1 != "-")
+ids_NMvM_cut <- ids_NMvM_cut$X.1
+cat(ids_NMvM_cut,file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/NMvMsign.txt",sep="\n")
+```
+
+Adding the IDs to the files:
+```{r}
+MvF_res <- MvF_res %>%
+  mutate(ids_MvF$X.1)
+MvF_res <- MvF_res[, c(7, 1:6)]
+write.csv(as.data.frame(MvF_res), file="~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/Male_vs_Female.csv")
+write.csv(as.data.frame(MvF_res), file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/results/Male_vs_Female.csv")
+
+NMvF_res <- NMvF_res %>%
+  mutate(ids_NMvF$X.1)
+NMvF_res <- NMvF_res[, c(7, 1:6)]
+write.csv(as.data.frame(NMvF_res), file="~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/Neomale_vs_Female.csv")
+write.csv(as.data.frame(NMvF_res), file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/results/Neomale_vs_Female.csv")
+
+NMvM_res <- NMvM_res %>%
+  mutate(ids_NMvM$X.1)
+NMvM_res <- NMvM_res[, c(7, 1:6)]
+write.csv(as.data.frame(NMvM_res), file="~/TNA2_RNAseq_NPC/trimming/Hisat2-Alignments/Sorted-bams/csv/Neomale_vs_Male.csv")
+write.csv(as.data.frame(NMvM_res), file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/results/Neomale_vs_Male.csv")
+
+```
+
+Ordering the results by fold change:
+```{r}
+MvF_overexpr <- MvF_res[order(MvF_res$log2FoldChange, decreasing = TRUE), ]
+MvF_overexpr <- MvF_overexpr[c(1:20),]
+MvF_overexpr
+write.csv(as.data.frame(MvF_overexpr),file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/MvF_overexpr.csv")
+
+MvF_underexpr <- MvF_res[order(MvF_res$log2FoldChange, decreasing = FALSE), ]
+MvF_underexpr <- MvF_underexpr[c(1:20),]
+MvF_underexpr
+write.csv(as.data.frame(MvF_underexpr),file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/MvF_underexpr.csv")
+
+
+NMvF_overexpr <- NMvF_res[order(NMvF_res$log2FoldChange, decreasing = TRUE), ]
+NMvF_overexpr <- NMvF_overexpr[c(1:20),]
+NMvF_overexpr
+write.csv(as.data.frame(NMvF_overexpr),file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/NMvF_overexpr.csv")
+
+NMvF_underexpr <- NMvF_res[order(NMvF_res$log2FoldChange, decreasing = FALSE), ]
+NMvF_underexpr <- NMvF_underexpr[c(1:20),]
+NMvF_underexpr
+write.csv(as.data.frame(NMvF_underexpr),file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/NMvF_underexpr.csv")
+
+
+NMvM_overexpr <- NMvM_res[order(NMvM_res$log2FoldChange, decreasing = TRUE), ]
+NMvM_overexpr
+write.csv(as.data.frame(NMvM_overexpr),file="/media/sbeato/NURIA/TFG/AA_RNAseq/bioinformatic_analysis/AA_DEF/pathway_analysis/NMvM_overexpr.csv")
+```
