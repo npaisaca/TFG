@@ -11,6 +11,6 @@ The contents of this repository and the results of the analysis were included in
 - **RNAseq_analysis_def**: includes the code for the different softwares of the RNA-seq, from the obtention of the reads file to the generation of the counts file.
 - **DESeq_analysis_def**: PCA and differential expression analysis.
 - **GO_and_pathway_analysis_def**: GO terms enrichment analysis (g:Profiler), generation of overview plots and dataframes.
-- **graphs_def**: includes the code for the graphing of the Volcanoplots, the GO enrichment scatterplot with the KEGG pathways, and other graphs that due to space or redundancy were not added to the final TFG report.
+- **graphs_def**: includes the code for the graphing of the Volcanoplots, the GO enrichment scatterplot with the KEGG pathways, and other graphs that due to redundancy or limited discussion space were not added to the final TFG report.
 
 All files were created in an R-markdown format.
